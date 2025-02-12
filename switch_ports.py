@@ -1,190 +1,193 @@
 import os
 import csv
+import argparse
 from PIL import Image, ImageDraw, ImageFont
 
-# Load the base switch image
-image_path = "HPE-5130-48-Port.png"
+# --- Command-Line Argument Parsing ---
+parser = argparse.ArgumentParser(
+    description="Process switch CSV file using a specified base image, ports, and VLAN colors configuration."
+)
+parser.add_argument(
+    "--image",
+    required=True,
+    help="Path to the base switch image file (e.g., '48 PORTS.png')."
+)
+parser.add_argument(
+    "--ports",
+    required=True,
+    help="Path to the ports CSV file (e.g., 'configcsvs/48ports.csv')."
+)
+parser.add_argument(
+    "--vlan_colors",
+    default=os.path.join("configcsvs", "vlan_colors.csv"),
+    help="Path to the VLAN colors CSV file (default: 'configcsvs/vlan_colors.csv')."
+)
+parser.add_argument(
+    "--switch_csv",
+    required=True,
+    help="Path to the CSV file containing switch port details (e.g., 'switch_details.csv')."
+)
+args = parser.parse_args()
 
-# Get a list of all CSV files in the current directory
-csv_files = [f for f in os.listdir() if f.endswith(".csv")]
+# --- Set file paths from command-line arguments ---
+IMAGE_PATH = args.image
+PORTS_FILE = args.ports
+VLAN_COLORS_FILE = args.vlan_colors
+SWITCH_CSV_FILE = args.switch_csv
 
-# Define the port regions manually (as already given)
-ports = {
-    1: (53, 54, 112, 102),
-    2: (53, 119, 112, 165),
-    3: (116, 54, 176, 102),
-    4: (116, 119, 176, 165),
-    5: (179, 54, 239, 102),
-    6: (179, 119, 239, 165),
-    7: (242, 54, 302, 102),
-    8: (242, 119, 302, 165),
-    9: (305, 54, 365, 102),
-    10: (305, 119, 365, 165),
-    11: (368, 54, 428, 102),
-    12: (368, 119, 428, 165),
-    13: (464, 54, 524, 102),
-    14: (464, 119, 524, 165),
-    15: (527, 54, 587, 102),
-    16: (527, 119, 587, 165),
-    17: (590, 54, 650, 102),
-    18: (590, 119, 650, 165),
-    19: (653, 54, 713, 102),
-    20: (653, 119, 713, 165),
-    21: (716, 54, 776, 102),
-    22: (716, 119, 776, 165),
-    23: (779, 54, 839, 102),
-    24: (779, 119, 839, 165),
-    25: (875, 54, 935, 102),
-    26: (875, 119, 935, 165),
-    27: (938, 54, 998, 102),
-    28: (938, 119, 998, 165),
-    29: (1001, 54, 1061, 102),
-    30: (1001, 119, 1061, 165),
-    31: (1064, 54, 1124, 102),
-    32: (1064, 119, 1124, 165),
-    33: (1127, 54, 1187, 102),
-    34: (1127, 119, 1187, 165),
-    35: (1190, 54, 1250, 102),
-    36: (1190, 119, 1250, 165),
-    37: (1286, 54, 1346, 102),
-    38: (1286, 119, 1346, 165),
-    39: (1349, 54, 1409, 102),
-    40: (1349, 119, 1409, 165),
-    41: (1412, 54, 1472, 102),
-    42: (1412, 119, 1472, 165),
-    43: (1475, 54, 1535, 102),
-    44: (1475, 119, 1535, 165),
-    45: (1538, 54, 1598, 102),
-    46: (1538, 119, 1598, 165),
-    47: (1601, 54, 1661, 102),
-    48: (1601, 119, 1661, 165),
-}
+# --- READ PORTS FROM CSV ---
+# The ports CSV is expected to have a header: Port,x1,y1,x2,y2
+ports = {}
+with open(PORTS_FILE, mode="r", newline="") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        port = int(row["Port"])
+        x1 = int(row["x1"])
+        y1 = int(row["y1"])
+        x2 = int(row["x2"])
+        y2 = int(row["y2"])
+        ports[port] = (x1, y1, x2, y2)
 
-# Define VLAN to color mapping (RGB format)
-vlan_colors = {
-    298: (128, 0, 128),  # Purple
-    90: (255, 165, 0),    # Orange
-    192: (255, 0, 0),     # Red
-    511: (255, 255, 0),   # Yellow
-    1: (255, 255, 255),   # White
-}
+# --- READ VLAN COLORS FROM CSV ---
+# The VLAN colors CSV is expected to have a header: vlan,r,g,b
+vlan_colors = {}
+with open(VLAN_COLORS_FILE, mode="r", newline="") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        vlan_val = row["vlan"]
+        try:
+            key = int(vlan_val)
+        except ValueError:
+            key = vlan_val
+        r = int(row["r"])
+        g = int(row["g"])
+        b = int(row["b"])
+        vlan_colors[key] = (r, g, b)
 
-# Function to add VLAN key with color backgrounds and black border
-def add_vlan_key(draw, start_y, image_width, vlan_colors):
-    # Create a single line string for the key
-    box_width = 100  # Width of the background box for each VLAN
-    space_between_boxes = 10  # Space between each box
+# Verifies the Base Switch Image
+if not os.path.isfile(IMAGE_PATH):
+    raise FileNotFoundError(f"Base image file '{IMAGE_PATH}' not found.")
 
-    # Try loading a font (fallback to default)
-    try:
-        font = ImageFont.truetype("arial.ttf", 14)
-    except IOError:
-        font = ImageFont.load_default()
+# Checks if Switch column has a number
+def extract_numeric_switch(switch_name):
+    numeric_part = ''.join(filter(str.isdigit, switch_name))
+    return int(numeric_part) if numeric_part else None
 
-    # Calculate the width needed for the entire key line
-    total_width = 0
-    for vlan, color in vlan_colors.items():
-        text_width, _ = font.getbbox(str(vlan))[2:4]  # Get width of the text
-        total_width += box_width + space_between_boxes
+print(f"Processing {SWITCH_CSV_FILE}...")
 
-    # Calculate x_position to center the key line
-    x_position = (image_width - total_width) // 2
-    y_position = start_y
+vlan_mapping = {}    # Mapping: switch -> { port: vlan }
+running_status = {}  # Mapping: switch -> { port: True/False }
 
-    # Draw each VLAN number with a colored background
-    for vlan, color in vlan_colors.items():
-        # Draw the background (color box)
-        draw.rectangle([x_position, y_position, x_position + box_width, y_position + 20], fill=color)
+with open(SWITCH_CSV_FILE, mode="r", newline="") as csvfile:
+    reader = csv.reader(csvfile)
+    first_row = next(reader)
+    if first_row == ["Switch", "Port", "Running", "VLAN"]:
+        has_headers = True
+    else:
+        has_headers = False
+        csvfile.seek(0)  # Reset file pointer to re-read data
 
-        # Draw a black border around the filled section
-        draw.rectangle([x_position, y_position, x_position + box_width, y_position + 20], outline="black", width=2)
-
-        # Draw the VLAN number on top of the background
-        text = str(vlan)
-        text_width, text_height = font.getbbox(text)[2:4]  # Get the width of the text
-        text_x = x_position + (box_width - text_width) // 2  # Center the text
-        text_y = y_position + (20 - text_height) // 2  # Center the text vertically
-        draw.text((text_x, text_y), text, fill="black", font=font)
-
-        # Move to the next position
-        x_position += box_width + space_between_boxes
-
-# Iterate over each CSV file in the directory
-for csv_file_path in csv_files:
-    print(f"Processing {csv_file_path}...")
-
-    # Initialize VLAN mapping and Running status
-    vlan_mapping = {}
-    running_status = {}
-
-    # Read and process each CSV file
-    with open(csv_file_path, mode="r") as csvfile:
-        reader = csv.DictReader(csvfile)
-
-        # Ensure we handle header and data properly
-        for row in reader:
-            try:
-                switch = int(row["Switch"])  # Ensure it's not a header row
+    reader = csv.DictReader(csvfile) if has_headers else csv.reader(csvfile)
+    for row in reader:
+        try:
+            if has_headers:
+                switch_name = row["Switch"]
+                switch = extract_numeric_switch(switch_name)
                 port = int(row["Port"])
+                running = row["Running"].strip().upper()
                 vlan = int(row["VLAN"])
-                running = row["Running"].strip().upper()  # Read "Running" column
-            except ValueError:
-                continue  # Skip rows with invalid values (like the header row)
-
+            else:
+                switch_name = row[0]
+                switch = extract_numeric_switch(switch_name)
+                port = int(row[1])
+                running = row[2].strip().upper()
+                vlan = int(row[3])
+            if switch is None:
+                continue
             if switch not in vlan_mapping:
                 vlan_mapping[switch] = {}
                 running_status[switch] = {}
-
             vlan_mapping[switch][port] = vlan
-            running_status[switch][port] = running == "UP"  # True if UP, False otherwise
+            running_status[switch][port] = (running == "UP")
+        except ValueError:
+            continue
 
-    # Load the base switch image
-    image = Image.open(image_path).convert("RGB")  # Ensure RGB mode
-    pixels = image.load()  # Access the pixel data
+# Open the Base Switch Image
+image = Image.open(IMAGE_PATH).convert("RGB")
+target_color = (51, 51, 51)  # The color in the image to be replaced (e.g., dark gray)
 
-    # Define the target color to replace (RGB for #333333)
-    target_color = (51, 51, 51)
+final_image_width = image.width
+final_image_height = image.height * len(vlan_mapping) + 60 + 50
+final_image = Image.new("RGB", (final_image_width, final_image_height), "white")
 
-    # Create an image to combine all switch images
-    final_image_width = image.width
-    final_image_height = image.height * len(vlan_mapping) + 60  # Added space for key
-    final_image = Image.new("RGB", (final_image_width, final_image_height), "white")
+y_offset = 0
+for switch_num, ports_vlan in vlan_mapping.items():
+    switch_image = image.copy()
+    switch_pixels = switch_image.load()
+    draw = ImageDraw.Draw(switch_image)
+    for port_num, vlan_id in ports_vlan.items():
+        if port_num in ports:
+            x1, y1, x2, y2 = ports[port_num]
+            new_color = vlan_colors.get(vlan_id, None)
+            if new_color:
+                for x in range(x1, x2 + 1):
+                    for y in range(y1, y2 + 1):
+                        if switch_pixels[x, y] == target_color:
+                            switch_pixels[x, y] = new_color
+            if running_status[switch_num].get(port_num, False):
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                radius = min((x2 - x1), (y2 - y1)) // 6
+                draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(0, 255, 0))
+    final_image.paste(switch_image, (0, y_offset))
+    y_offset += image.height
 
-    # Process each switch and add to the final image
-    y_offset = 0
-    for switch_num, ports_vlan in vlan_mapping.items():
-        # Copy the base image for each switch
-        switch_image = image.copy()
-        switch_pixels = switch_image.load()
-        draw = ImageDraw.Draw(switch_image)
+# Build Legend Dictionary for the Key
+legend = {}
+patch_color = (255, 192, 203)
+for vlan_id, color in vlan_colors.items():
+    if color == patch_color:
+        legend["PATCH"] = patch_color
+    else:
+        legend[vlan_id] = color
 
-        # Process each port for the current switch
-        for port_num, vlan_id in ports_vlan.items():
-            if port_num in ports:
-                x1, y1, x2, y2 = ports[port_num]
-                new_color = vlan_colors.get(vlan_id, None)
-                if new_color:
-                    for x in range(x1, x2 + 1):
-                        for y in range(y1, y2 + 1):
-                            if switch_pixels[x, y] == target_color:
-                                switch_pixels[x, y] = new_color
+# Draw the VLAN Key and Switch CSV Name at the Bottom
+key_y_offset = final_image_height - 55  # Vertical offset for the key
+draw_final = ImageDraw.Draw(final_image)
+try:
+    # Try loading Arial with a size of 32; adjust the size as needed.
+    font = ImageFont.truetype("arial.ttf", 32)
+except IOError:
+    font = ImageFont.load_default()
 
-                # If the port is UP, draw a green circle
-                if running_status[switch_num].get(port_num, False):
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2  # Center of the port
-                    radius = min((x2 - x1), (y2 - y1)) // 6  # Fixed-size circle
-                    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(0, 255, 0))
+key_spacing = 200   # Horizontal spacing between each key element
 
-        # Paste the switch image into the final image
-        final_image.paste(switch_image, (0, y_offset))
-        y_offset += image.height  # Move down for the next switch
+# Compute initial x-offset so that the keys are centered (or pushed right)
+num_keys = len(legend)
+total_legend_width = num_keys * key_spacing
+key_x_offset = (final_image_width - total_legend_width) // 2
 
-    # Add VLAN key at the bottom
-    draw_final = ImageDraw.Draw(final_image)
-    add_vlan_key(draw_final, y_offset + 10, final_image_width, vlan_colors)
+# Draw the switch CSV file name above the key
+switch_csv_name = os.path.basename(SWITCH_CSV_FILE)
+# Set a vertical position for the switch label above the key; adjust as desired.
+switch_label_y = key_y_offset - 45
+# Use font.getbbox() to get text dimensions.
+bbox = font.getbbox(switch_csv_name)
+text_width = bbox[2] - bbox[0]
+text_height = bbox[3] - bbox[1]
+switch_x = (final_image_width - text_width) // 2
+draw_final.text((switch_x, switch_label_y), switch_csv_name, fill="black", font=font)
 
-    # Generate output path based on the CSV file name
-    output_path = os.path.splitext(csv_file_path)[0] + ".png"
-    # Save the combined image
-    final_image.save(output_path)
-    print(f"All switch VLAN-colored diagram saved to {output_path}")
+# Draw the Legend (VLAN Key)
+for key_label, color in legend.items():
+    rect_x1, rect_y1 = key_x_offset - 15, key_y_offset
+    rect_x2, rect_y2 = key_x_offset + 120, key_y_offset + 43
+    draw_final.rectangle([rect_x1, rect_y1, rect_x2, rect_y2], fill=color, outline="black", width=2)
+    draw_final.text((key_x_offset, key_y_offset + 5), str(key_label), fill="black", font=font)
+    key_x_offset += key_spacing
+
+output_path = os.path.splitext(SWITCH_CSV_FILE)[0] + ".png"
+final_image.save(output_path)
+print(f"Saved VLAN-colored diagram to {output_path}")
+
+# Example command-line usage:
+# python switch_ports.py --image "48 PORTS.png" --ports "configcsvs/48ports.csv" --switch_csv "CServerRoom.csv"
